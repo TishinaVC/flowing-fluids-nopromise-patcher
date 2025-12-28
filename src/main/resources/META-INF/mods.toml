@@ -1,0 +1,32 @@
+modLoader="javafml"
+loaderVersion="[47,)"
+license="All Rights Reserved"
+
+[[mods]]
+modId="flowingfluidsfixes"
+version="1.0.0"
+displayName="FlowingFluidsFixes1.0"
+credits="Thanks to Traben for Flowing Fluids"
+authors="FlowingFluidsFixes"
+description='''Optimizes Flowing Fluids mod for better performance.'''
+
+[[dependencies.flowingfluidsfixes]]
+modId="forge"
+mandatory=true
+versionRange="[47.4.13,)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.flowingfluidsfixes]]
+modId="minecraft"
+mandatory=true
+versionRange="[1.20.1]"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.flowingfluidsfixes]]
+modId="flowing_fluids"
+mandatory=true
+versionRange="[0.6.1,)"
+ordering="AFTER"
+side="BOTH"

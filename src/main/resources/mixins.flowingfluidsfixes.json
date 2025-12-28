@@ -1,0 +1,14 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "flowingfluidsfixes.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "refmap": "mixins.flowingfluidsfixes.refmap.json",
+  "mixins": [
+    "FlowingFluidsMixin",
+    "FluidBlockMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
