@@ -68,6 +68,7 @@ public class FlowingFluidsFixes {
     private static long lastBlockCacheClear = 0;
     private static int blockCacheHits = 0;
     private static int blockCacheMisses = 0;
+    private static boolean allowCaching = false; // SAFETY: Disable caching during mod initialization
     
     // NEW: Chunk-based batching to reduce LevelChunk operations
     private static final Object2ObjectOpenHashMap<ChunkPos, ObjectArrayList<BlockPos>> CHUNK_BATCH_MAP = new Object2ObjectOpenHashMap<>();
@@ -111,9 +112,24 @@ public class FlowingFluidsFixes {
     
     @SubscribeEvent
     public void onServerStarting(ServerStartingEvent event) {
+        // Clear all caches to prevent interference with other mods during initialization
+        resetStats();
+        
+        // CRITICAL: Clear caches immediately to prevent registry interference
+        blockStateCache.clear();
+        fluidStateCache.clear();
+        levelAccessCache.clear();
+        CHUNK_BATCH_MAP.clear();
+        chunkTaskBatch.clear();
+        blockEntityProcessTime.clear();
+        resourceHashCache.clear();
+        
         // Detect Flowing Fluids and setup reflection
         detectFlowingFluids();
-        System.out.println("[FlowingFluidsFixes] Systems consolidated and ready");
+        
+        // SAFETY: Enable caching only after all mods have finished initializing
+        allowCaching = true;
+        System.out.println("[FlowingFluidsFixes] Caching enabled - systems consolidated and ready");
     }
     
     /**
@@ -250,7 +266,7 @@ public class FlowingFluidsFixes {
             BlockPos pos = event.getPos();
             
             // NEW: Level operation optimization - reduce worldwide level access
-            if (cachedMSPT > 5.0) {
+            if (cachedMSPT > 5.0 && allowCaching) {
                 // Cache level access results to reduce repeated operations
                 Boolean cachedResult = levelAccessCache.get(pos);
                 if (cachedResult != null) {
@@ -317,7 +333,7 @@ public class FlowingFluidsFixes {
             // NEW: Add to chunk batch for LevelChunk optimization
             addToChunkBatch(pos);
             
-            if (cachedMSPT > 5.0) {
+            if (cachedMSPT > 5.0 && allowCaching) {
                 // Try to get from cache first
                 BlockState cachedState = blockStateCache.get(pos);
                 FluidState cachedFluidState = fluidStateCache.get(pos);
