@@ -1,6 +1,6 @@
 package flowingfluidsfixes;
 
-import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.common.Mod.EventBusSubscriber;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.event.server.ServerStartingEvent;
 
@@ -8,9 +8,9 @@ import net.minecraftforge.event.server.ServerStartingEvent;
  * Minimal Hook for Flowing Fluids mod detection
  * 
  * NOTE: This is a lightweight hook that only detects Flowing Fluids presence.
- * All optimization is handled by SimpleFluidOptimizer via Forge events.
+ * All optimization is handled by FlowingFluidsFixes via Forge events.
  */
-@Mod.EventBusSubscriber(modid = "flowingfluidsfixes")
+@EventBusSubscriber(modid = "flowingfluidsfixes")
 public class FlowingFluidsHook {
     
     private static boolean flowingFluidsDetected = false;

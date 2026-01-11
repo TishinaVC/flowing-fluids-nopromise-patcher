@@ -18,6 +18,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.Map;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 
 /**
  * CONSOLIDATED Flowing Fluids Performance Optimizer
@@ -49,6 +50,12 @@ public class FlowingFluidsFixes {
     private static final ConcurrentHashMap<Player, BlockPos> playerPositions = new ConcurrentHashMap<>();
     private static long lastPlayerUpdate = 0;
     private static long lastMSPTCheck = 0; // Track when we last checked MSPT
+    
+    // Level operation optimization - reduce worldwide scans
+    private static final ConcurrentHashMap<BlockPos, Boolean> levelAccessCache = new ConcurrentHashMap<>();
+    private static long lastLevelCacheClear = 0;
+    private static int levelAccessCacheHits = 0;
+    private static int levelAccessCacheMisses = 0;
     
     // Flowing Fluids integration
     private static boolean flowingFluidsDetected = false;
@@ -126,6 +133,14 @@ public class FlowingFluidsFixes {
                 updatePlayerPositions(event.getServer());
                 lastPlayerUpdate = System.currentTimeMillis();
             }
+            
+            // Clear level access cache every 10 seconds to prevent memory leaks
+            if (System.currentTimeMillis() - lastLevelCacheClear > 10000) {
+                levelAccessCache.clear();
+                lastLevelCacheClear = System.currentTimeMillis();
+                levelAccessCacheHits = 0;
+                levelAccessCacheMisses = 0;
+            }
         }
     }
     
@@ -157,6 +172,8 @@ public class FlowingFluidsFixes {
             if (currentEvents % 3 != 0) return; // Skip 66%
         } else if (cachedMSPT > 20.0) {
             if (currentEvents % 5 != 0) return; // Skip 80%
+        } else if (cachedMSPT > 10.0) {
+            if (currentEvents % 2 != 0) return; // Skip 50% when moderate load
         }
         
         // CRITICAL: Skip ALL world access when server is struggling
@@ -168,6 +185,30 @@ public class FlowingFluidsFixes {
         
         if (event.getLevel() instanceof ServerLevel level) {
             BlockPos pos = event.getPos();
+            
+            // NEW: Level operation optimization - reduce worldwide level access
+            if (cachedMSPT > 5.0) {
+                // Cache level access results to reduce repeated operations
+                Boolean cachedResult = levelAccessCache.get(pos);
+                if (cachedResult != null) {
+                    levelAccessCacheHits++;
+                    if (!cachedResult) {
+                        skippedFluidEvents.incrementAndGet();
+                        return; // Skip based on cached result
+                    }
+                } else {
+                    levelAccessCacheMisses++;
+                }
+            }
+            
+            // NEW: Aggressive level operation reduction for high MSPT
+            if (cachedMSPT > 15.0) {
+                // Skip 75% of level access when server struggling
+                if (currentEvents % 4 != 0) {
+                    skippedFluidEvents.incrementAndGet();
+                    return;
+                }
+            }
             
             // NEW: Entity and chunk optimization when server struggling
             if (cachedMSPT > 12.0) {
@@ -205,6 +246,12 @@ public class FlowingFluidsFixes {
             // Only do expensive world access when server is healthy
             BlockState state = level.getBlockState(pos);
             FluidState fluidState = state.getFluidState();
+            
+            // Cache the result for future level operations
+            if (cachedMSPT > 5.0 && levelAccessCache.size() < 5000) {
+                boolean shouldProcess = !fluidState.isEmpty() && fluidState.getType() != Fluids.EMPTY && !fluidState.isSource();
+                levelAccessCache.put(pos, shouldProcess);
+            }
             
             // Only process flowing fluids, skip static source blocks
             if (!fluidState.isEmpty() && fluidState.getType() != Fluids.EMPTY && !fluidState.isSource()) {
@@ -305,9 +352,11 @@ public class FlowingFluidsFixes {
             maxEventsPerTick = 10; // High load
         } else if (cachedMSPT > 15.0) {
             maxEventsPerTick = 25; // Moderate load
-        } else if (cachedMSPT < 10.0) {
+        } else if (cachedMSPT > 10.0) {
+            maxEventsPerTick = 35; // Reduced from 50 to lower level operations
+        } else if (cachedMSPT < 8.0) {
             // Gradually increase when performing well
-            if (maxEventsPerTick < 100) maxEventsPerTick += 5;
+            if (maxEventsPerTick < 80) maxEventsPerTick += 5; // Reduced max from 100
         }
     }
     
@@ -341,7 +390,7 @@ public class FlowingFluidsFixes {
             // Apply the new configuration
             maxUpdatesField.set(null, newMaxUpdates);
             
-        } catch (Exception e) {
+        } catch (IllegalAccessException | SecurityException | IllegalArgumentException e) {
             // Silently fail - don't break the mod if config access fails
         }
     }
@@ -363,7 +412,7 @@ public class FlowingFluidsFixes {
         } catch (ClassNotFoundException e) {
             flowingFluidsDetected = false;
             System.out.println("[FlowingFluidsFixes] Flowing Fluids not found - vanilla fluid optimization");
-        } catch (Exception e) {
+        } catch (NoSuchFieldException e) {
             System.out.println("[FlowingFluidsFixes] Flowing Fluids config setup failed: " + e.getMessage());
         }
     }
@@ -474,5 +523,18 @@ public class FlowingFluidsFixes {
         totalTickTimeNanos.set(0);
         currentTPS = 20.0;
         cachedMSPT = 20.0;
+        levelAccessCache.clear();
+        levelAccessCacheHits = 0;
+        levelAccessCacheMisses = 0;
+    }
+    
+    /**
+     * Get level operation cache statistics
+     */
+    public static String getLevelCacheStats() {
+        int total = levelAccessCacheHits + levelAccessCacheMisses;
+        double hitRate = total > 0 ? (levelAccessCacheHits * 100.0 / total) : 0.0;
+        return String.format("Cache: %d hits, %d misses, %.1f%% hit rate, %d entries", 
+                           levelAccessCacheHits, levelAccessCacheMisses, hitRate, levelAccessCache.size());
     }
 }

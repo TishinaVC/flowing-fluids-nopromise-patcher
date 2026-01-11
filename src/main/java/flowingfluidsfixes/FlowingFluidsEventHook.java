@@ -1,8 +1,6 @@
 package flowingfluidsfixes;
 
-import net.minecraftforge.fml.common.Mod;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import net.minecraftforge.fml.common.Mod.EventBusSubscriber;
 
 /**
  * ULTRA-OPTIMIZED Flowing Fluids event hooking system.
@@ -11,17 +9,15 @@ import org.apache.logging.log4j.Logger;
  * This file now contains only stub methods for compatibility.
  * All actual processing is done in FlowingFluidsFixes to avoid duplicate overhead.
  */
-@Mod.EventBusSubscriber(modid = "flowingfluidsfixes")
+@EventBusSubscriber(modid = "flowingfluidsfixes")
 public class FlowingFluidsEventHook {
-    
-    private static final Logger LOGGER = LogManager.getLogger();
     
     /**
      * STUB: Initialize Flowing Fluids hooks - moved to main class
      */
     public static void installHooks() {
         // All functionality moved to FlowingFluidsFixes for consolidation
-        LOGGER.info("[FlowingFluidsEventHook] Hooks consolidated into main class");
+        System.out.println("[FlowingFluidsEventHook] Hooks consolidated into main class");
     }
     
     /**
