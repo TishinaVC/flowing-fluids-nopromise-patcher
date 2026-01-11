@@ -156,8 +156,8 @@ public class FlowingFluidsFixes {
                 levelAccessCacheMisses = 0;
             }
             
-            // Clear BlockState cache every 15 seconds to prevent memory leaks
-            if (System.currentTimeMillis() - lastBlockCacheClear > 15000) {
+            // Clear BlockState cache every 30 seconds to prevent memory leaks (extended from 15s)
+            if (System.currentTimeMillis() - lastBlockCacheClear > 30000) {
                 blockStateCache.clear();
                 fluidStateCache.clear();
                 lastBlockCacheClear = System.currentTimeMillis();
@@ -165,8 +165,8 @@ public class FlowingFluidsFixes {
                 blockCacheMisses = 0;
             }
             
-            // Process chunk batches every 5 seconds to reduce LevelChunk operations
-            if (System.currentTimeMillis() - lastBatchProcess > 5000) {
+            // Process chunk batches every 10 seconds to reduce LevelChunk operations (extended from 5s)
+            if (System.currentTimeMillis() - lastBatchProcess > 10000) {
                 processChunkBatches();
                 lastBatchProcess = System.currentTimeMillis();
             }
@@ -293,7 +293,7 @@ public class FlowingFluidsFixes {
                     // Cache miss - get from world and cache result
                     state = level.getBlockState(pos);
                     fluidState = state.getFluidState();
-                    if (blockStateCache.size() < 10000) { // Limit cache size
+                    if (blockStateCache.size() < 5000) { // Reduced cache size from 10000 to prevent overhead
                         blockStateCache.put(pos, state);
                         fluidStateCache.put(pos, fluidState);
                     }
@@ -623,8 +623,8 @@ public class FlowingFluidsFixes {
             ChunkPos chunkPos = entry.getKey();
             List<BlockPos> positions = entry.getValue();
             
-            if (positions.size() > 3) {
-                // Batch process multiple positions in same chunk
+            if (positions.size() > 5) {
+                // Only batch chunks with 6+ positions to reduce overhead (increased from 3)
                 // This reduces LevelChunk.get() calls from N to 1 per chunk
                 batchedOperations += positions.size() - 1;
                 processedChunks++;
@@ -639,7 +639,7 @@ public class FlowingFluidsFixes {
      * Add position to chunk batch for LevelChunk optimization
      */
     private static void addToChunkBatch(BlockPos pos) {
-        if (cachedMSPT < 8.0) return; // Only batch when server needs help
+        if (cachedMSPT < 12.0) return; // Only batch when server really needs help (increased from 8.0)
         
         ChunkPos chunkPos = new ChunkPos(pos);
         chunkBatchMap.computeIfAbsent(chunkPos, k -> new ArrayList<>()).add(pos);
