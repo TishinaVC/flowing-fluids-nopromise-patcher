@@ -56,6 +56,13 @@ public class FlowingFluidsFixes {
     private static int levelAccessCacheHits = 0;
     private static int levelAccessCacheMisses = 0;
     
+    // NEW: BlockState caching to reduce LevelChunk/PalettedContainer operations
+    private static final ConcurrentHashMap<BlockPos, BlockState> blockStateCache = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<BlockPos, FluidState> fluidStateCache = new ConcurrentHashMap<>();
+    private static long lastBlockCacheClear = 0;
+    private static int blockCacheHits = 0;
+    private static int blockCacheMisses = 0;
+    
     // Flowing Fluids integration
     private static boolean flowingFluidsDetected = false;
     private static Class<?> flowingFluidsConfigClass = null;
@@ -139,6 +146,15 @@ public class FlowingFluidsFixes {
                 lastLevelCacheClear = System.currentTimeMillis();
                 levelAccessCacheHits = 0;
                 levelAccessCacheMisses = 0;
+            }
+            
+            // Clear BlockState cache every 15 seconds to prevent memory leaks
+            if (System.currentTimeMillis() - lastBlockCacheClear > 15000) {
+                blockStateCache.clear();
+                fluidStateCache.clear();
+                lastBlockCacheClear = System.currentTimeMillis();
+                blockCacheHits = 0;
+                blockCacheMisses = 0;
             }
         }
     }
@@ -243,8 +259,32 @@ public class FlowingFluidsFixes {
             lastProcessedHash = posHash;
             
             // Only do expensive world access when server is healthy
-            BlockState state = level.getBlockState(pos);
-            FluidState fluidState = state.getFluidState();
+            // NEW: BlockState caching to reduce LevelChunk/PalettedContainer operations
+            BlockState state;
+            FluidState fluidState;
+            
+            if (cachedMSPT > 5.0) {
+                // Try to get from cache first
+                BlockState cachedState = blockStateCache.get(pos);
+                if (cachedState != null) {
+                    state = cachedState;
+                    fluidState = fluidStateCache.get(pos);
+                    blockCacheHits++;
+                } else {
+                    // Cache miss - get from world and cache result
+                    state = level.getBlockState(pos);
+                    fluidState = state.getFluidState();
+                    if (blockStateCache.size() < 10000) { // Limit cache size
+                        blockStateCache.put(pos, state);
+                        fluidStateCache.put(pos, fluidState);
+                    }
+                    blockCacheMisses++;
+                }
+            } else {
+                // Server is healthy - direct access
+                state = level.getBlockState(pos);
+                fluidState = state.getFluidState();
+            }
             
             // Cache the result for future level operations
             if (cachedMSPT > 5.0 && levelAccessCache.size() < 5000) {
@@ -525,6 +565,10 @@ public class FlowingFluidsFixes {
         levelAccessCache.clear();
         levelAccessCacheHits = 0;
         levelAccessCacheMisses = 0;
+        blockStateCache.clear();
+        fluidStateCache.clear();
+        blockCacheHits = 0;
+        blockCacheMisses = 0;
     }
     
     /**
@@ -535,5 +579,15 @@ public class FlowingFluidsFixes {
         double hitRate = total > 0 ? (levelAccessCacheHits * 100.0 / total) : 0.0;
         return String.format("Cache: %d hits, %d misses, %.1f%% hit rate, %d entries", 
                            levelAccessCacheHits, levelAccessCacheMisses, hitRate, levelAccessCache.size());
+    }
+    
+    /**
+     * Get BlockState cache statistics
+     */
+    public static String getBlockCacheStats() {
+        int total = blockCacheHits + blockCacheMisses;
+        double hitRate = total > 0 ? (blockCacheHits * 100.0 / total) : 0.0;
+        return String.format("BlockCache: %d hits, %d misses, %.1f%% hit rate, %d entries", 
+                           blockCacheHits, blockCacheMisses, hitRate, blockStateCache.size());
     }
 }
