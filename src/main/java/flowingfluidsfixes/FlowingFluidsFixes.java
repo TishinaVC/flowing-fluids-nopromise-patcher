@@ -3,8 +3,8 @@ package flowingfluidsfixes;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.event.server.ServerStartingEvent;
-import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.level.BlockEvent;
+import net.minecraftforge.event.TickEvent;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.ChunkPos;
@@ -16,8 +16,11 @@ import net.minecraft.server.MinecraftServer;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.CompletableFuture;
 import java.util.Map;
 import java.util.List;
+import java.util.ArrayList;
 import java.lang.reflect.Field;
 import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
@@ -67,9 +70,21 @@ public class FlowingFluidsFixes {
     private static int blockCacheMisses = 0;
     
     // NEW: Chunk-based batching to reduce LevelChunk operations
-    private static final Object2ObjectOpenHashMap<ChunkPos, ObjectArrayList<BlockPos>> chunkBatchMap = new Object2ObjectOpenHashMap<>();
+    private static final Object2ObjectOpenHashMap<ChunkPos, ObjectArrayList<BlockPos>> CHUNK_BATCH_MAP = new Object2ObjectOpenHashMap<>();
     private static long lastBatchProcess = 0;
     private static int batchedOperations = 0;
+    
+    // NEW: Chunk task batching to reduce ChunkTaskPriorityQueueSorter operations
+    private static final ConcurrentHashMap<ChunkPos, List<Runnable>> chunkTaskBatch = new ConcurrentHashMap<>();
+    private static long lastChunkTaskProcess = 0;
+    
+    // NEW: Async operation management to reduce CompletableFuture overload
+    private static final Semaphore asyncSemaphore = new Semaphore(10);
+    private static final AtomicInteger asyncOperations = new AtomicInteger(0);
+    
+    // NEW: BlockEntity processing optimization to reduce LevelChunk operations
+    private static final ConcurrentHashMap<BlockPos, Long> blockEntityProcessTime = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, Integer> resourceHashCache = new ConcurrentHashMap<>();
     
     // Flowing Fluids integration
     private static boolean flowingFluidsDetected = false;
@@ -169,6 +184,25 @@ public class FlowingFluidsFixes {
             if (System.currentTimeMillis() - lastBatchProcess > 10000) {
                 processChunkBatches();
                 lastBatchProcess = System.currentTimeMillis();
+            }
+            
+            // Process chunk tasks every 5 seconds to reduce ChunkTaskPriorityQueueSorter operations
+            if (System.currentTimeMillis() - lastChunkTaskProcess > 5000) {
+                processChunkTasks();
+                lastChunkTaskProcess = System.currentTimeMillis();
+            }
+            
+            // Clean up old BlockEntity processing times every 2 minutes
+            if (System.currentTimeMillis() % 120000 < 50) {
+                long cutoff = System.currentTimeMillis() - 120000;
+                blockEntityProcessTime.entrySet().removeIf(entry -> entry.getValue() < cutoff);
+            }
+            
+            // Clean up old resource hash cache every 5 minutes
+            if (System.currentTimeMillis() % 300000 < 50) {
+                if (resourceHashCache.size() > 1000) {
+                    resourceHashCache.clear();
+                }
             }
         }
     }
@@ -291,8 +325,9 @@ public class FlowingFluidsFixes {
                     // Use cached values to avoid LevelChunk/PalettedContainer operations
                     // Both state and fluidState are used as a paired caching system
                     state = cachedState;           // Used for potential future level operations
-                    fluidState = cachedFluidState;  // Used for fluid processing below
+                    fluidState = cachedFluidState;  // Used for fluid processing below (line 354)
                     blockCacheHits++;
+                    // Both cached values are used in the fluid processing logic below
                 } else {
                     // Cache miss - get from world and cache result
                     state = level.getBlockState(pos);
@@ -590,7 +625,7 @@ public class FlowingFluidsFixes {
         fluidStateCache.clear();
         blockCacheHits = 0;
         blockCacheMisses = 0;
-        chunkBatchMap.clear();
+        CHUNK_BATCH_MAP.clear();
         batchedOperations = 0;
     }
     
@@ -618,9 +653,9 @@ public class FlowingFluidsFixes {
      * Process chunk batches to reduce LevelChunk operations
      */
     private static void processChunkBatches() {
-        if (chunkBatchMap.isEmpty()) return;
+        if (CHUNK_BATCH_MAP.isEmpty()) return;
         
-        for (Object2ObjectOpenHashMap.Entry<ChunkPos, ObjectArrayList<BlockPos>> entry : chunkBatchMap.object2ObjectEntrySet()) {
+        for (Object2ObjectOpenHashMap.Entry<ChunkPos, ObjectArrayList<BlockPos>> entry : CHUNK_BATCH_MAP.object2ObjectEntrySet()) {
             ObjectArrayList<BlockPos> positions = entry.getValue();
             
             if (positions.size() > 5) {
@@ -631,7 +666,7 @@ public class FlowingFluidsFixes {
         }
         
         // Clear batch map after processing
-        chunkBatchMap.clear();
+        CHUNK_BATCH_MAP.clear();
     }
     
     /**
@@ -644,7 +679,7 @@ public class FlowingFluidsFixes {
         int chunkX = pos.getX() >> 4;
         int chunkZ = pos.getZ() >> 4;
         ChunkPos chunkPos = new ChunkPos(chunkX, chunkZ);
-        chunkBatchMap.computeIfAbsent(chunkPos, k -> new ObjectArrayList<>()).add(pos);
+        CHUNK_BATCH_MAP.computeIfAbsent(chunkPos, k -> new ObjectArrayList<>()).add(pos);
     }
     
     /**
@@ -652,7 +687,80 @@ public class FlowingFluidsFixes {
      */
     public static String getChunkBatchStats() {
         return String.format("ChunkBatches: %d chunks, %d batched operations, %d total positions", 
-                           chunkBatchMap.size(), batchedOperations, 
-                           chunkBatchMap.values().stream().mapToInt(List::size).sum());
+                           CHUNK_BATCH_MAP.size(), batchedOperations, 
+                           CHUNK_BATCH_MAP.values().stream().mapToInt(List::size).sum());
+    }
+    
+    /**
+     * Process chunk tasks to reduce ChunkTaskPriorityQueueSorter operations
+     */
+    private static void processChunkTasks() {
+        if (chunkTaskBatch.isEmpty()) return;
+        
+        for (Map.Entry<ChunkPos, List<Runnable>> entry : chunkTaskBatch.entrySet()) {
+            List<Runnable> tasks = entry.getValue();
+            if (tasks.size() > 3) {
+                // Batch process chunk tasks to reduce sorter operations
+                batchedOperations += tasks.size() - 1;
+                for (Runnable task : tasks) {
+                    try {
+                        task.run();
+                    } catch (Exception e) {
+                        // Log error but continue processing
+                    }
+                }
+            }
+        }
+        
+        // Clear task batch after processing
+        chunkTaskBatch.clear();
+    }
+    
+    /**
+     * Add chunk task to batch for ChunkTaskPriorityQueueSorter optimization
+     */
+    public static void batchChunkTask(ChunkPos pos, Runnable task) {
+        if (cachedMSPT < 15.0) return; // Only batch when server needs help
+        
+        chunkTaskBatch.computeIfAbsent(pos, k -> new ArrayList<>()).add(task);
+    }
+    
+    /**
+     * Execute async operation with rate limiting to reduce CompletableFuture overload
+     */
+    public static void executeAsyncOperation(Runnable operation) {
+        if (asyncSemaphore.tryAcquire()) {
+            asyncOperations.incrementAndGet();
+            CompletableFuture.runAsync(() -> {
+                try {
+                    operation.run();
+                } finally {
+                    asyncSemaphore.release();
+                    asyncOperations.decrementAndGet();
+                }
+            });
+        }
+    }
+    
+    /**
+     * Check if BlockEntity should be processed (reduces LevelChunk operations)
+     */
+    public static boolean shouldProcessBlockEntity(BlockPos pos) {
+        long currentTime = System.currentTimeMillis();
+        Long lastProcess = blockEntityProcessTime.get(pos);
+        
+        if (lastProcess != null && currentTime - lastProcess < 1000) {
+            return false; // Skip processing if recently processed
+        }
+        
+        blockEntityProcessTime.put(pos, currentTime);
+        return true;
+    }
+    
+    /**
+     * Get cached resource hash code to reduce ResourceLocation operations
+     */
+    public static int getCachedResourceHash(String resource) {
+        return resourceHashCache.computeIfAbsent(resource, String::hashCode);
     }
 }
