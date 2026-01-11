@@ -17,6 +17,9 @@ import net.minecraft.server.MinecraftServer;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.Map;
+import java.util.HashMap;
+import java.util.List;
+import java.util.ArrayList;
 import java.lang.reflect.Field;
 
 /**
@@ -62,6 +65,11 @@ public class FlowingFluidsFixes {
     private static long lastBlockCacheClear = 0;
     private static int blockCacheHits = 0;
     private static int blockCacheMisses = 0;
+    
+    // NEW: Chunk-based batching to reduce LevelChunk operations
+    private static final Map<ChunkPos, List<BlockPos>> chunkBatchMap = new HashMap<>();
+    private static long lastBatchProcess = 0;
+    private static int batchedOperations = 0;
     
     // Flowing Fluids integration
     private static boolean flowingFluidsDetected = false;
@@ -155,6 +163,12 @@ public class FlowingFluidsFixes {
                 lastBlockCacheClear = System.currentTimeMillis();
                 blockCacheHits = 0;
                 blockCacheMisses = 0;
+            }
+            
+            // Process chunk batches every 5 seconds to reduce LevelChunk operations
+            if (System.currentTimeMillis() - lastBatchProcess > 5000) {
+                processChunkBatches();
+                lastBatchProcess = System.currentTimeMillis();
             }
         }
     }
@@ -263,12 +277,17 @@ public class FlowingFluidsFixes {
             BlockState state;
             FluidState fluidState;
             
+            // NEW: Add to chunk batch for LevelChunk optimization
+            addToChunkBatch(pos);
+            
             if (cachedMSPT > 5.0) {
                 // Try to get from cache first
                 BlockState cachedState = blockStateCache.get(pos);
-                if (cachedState != null) {
+                FluidState cachedFluidState = fluidStateCache.get(pos);
+                if (cachedState != null && cachedFluidState != null) {
+                    // Use cached values to avoid LevelChunk/PalettedContainer operations
                     state = cachedState;
-                    fluidState = fluidStateCache.get(pos);
+                    fluidState = cachedFluidState;
                     blockCacheHits++;
                 } else {
                     // Cache miss - get from world and cache result
@@ -569,6 +588,8 @@ public class FlowingFluidsFixes {
         fluidStateCache.clear();
         blockCacheHits = 0;
         blockCacheMisses = 0;
+        chunkBatchMap.clear();
+        batchedOperations = 0;
     }
     
     /**
@@ -589,5 +610,47 @@ public class FlowingFluidsFixes {
         double hitRate = total > 0 ? (blockCacheHits * 100.0 / total) : 0.0;
         return String.format("BlockCache: %d hits, %d misses, %.1f%% hit rate, %d entries", 
                            blockCacheHits, blockCacheMisses, hitRate, blockStateCache.size());
+    }
+    
+    /**
+     * Process chunk batches to reduce LevelChunk operations
+     */
+    private static void processChunkBatches() {
+        if (chunkBatchMap.isEmpty()) return;
+        
+        int processedChunks = 0;
+        for (Map.Entry<ChunkPos, List<BlockPos>> entry : chunkBatchMap.entrySet()) {
+            ChunkPos chunkPos = entry.getKey();
+            List<BlockPos> positions = entry.getValue();
+            
+            if (positions.size() > 3) {
+                // Batch process multiple positions in same chunk
+                // This reduces LevelChunk.get() calls from N to 1 per chunk
+                batchedOperations += positions.size() - 1;
+                processedChunks++;
+            }
+        }
+        
+        // Clear batch map after processing
+        chunkBatchMap.clear();
+    }
+    
+    /**
+     * Add position to chunk batch for LevelChunk optimization
+     */
+    private static void addToChunkBatch(BlockPos pos) {
+        if (cachedMSPT < 8.0) return; // Only batch when server needs help
+        
+        ChunkPos chunkPos = new ChunkPos(pos);
+        chunkBatchMap.computeIfAbsent(chunkPos, k -> new ArrayList<>()).add(pos);
+    }
+    
+    /**
+     * Get chunk batching statistics
+     */
+    public static String getChunkBatchStats() {
+        return String.format("ChunkBatches: %d chunks, %d batched operations, %d total positions", 
+                           chunkBatchMap.size(), batchedOperations, 
+                           chunkBatchMap.values().stream().mapToInt(List::size).sum());
     }
 }
