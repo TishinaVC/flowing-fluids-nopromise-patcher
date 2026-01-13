@@ -29,6 +29,9 @@ Features:
 - Progressive filtering based on server load
 - Comprehensive bottleneck targeting'''
 
+# Mixin configuration
+mixins="mixins.flowingfluidsfixes.json"
+
 [[dependencies.flowingfluidsfixes]]
 modId="forge"
 mandatory=true
