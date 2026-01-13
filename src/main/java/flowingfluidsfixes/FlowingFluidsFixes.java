@@ -54,6 +54,17 @@ public class FlowingFluidsFixes {
     private static final double EMERGENCY_MSPT = 30.0; // reduced from 50.0 for earlier protection
     private static final double STARTUP_MSPT = 20.0; // startup-specific threshold
     
+    // ENTITY & CHUNK THROTTLING
+    private static final double ENTITY_THROTTLE_MSPT = 15.0; // throttle entities at 15ms
+    private static final double CHUNK_THROTTLE_MSPT = 25.0; // throttle chunks at 25ms
+    private static final int ENTITY_SKIP_RATE = 2; // skip every 2nd entity during high MSPT
+    private static final int CHUNK_SKIP_RATE = 3; // skip every 3rd chunk during high MSPT
+    
+    // LEVEL OPERATION THROTTLING (CRITICAL)
+    private static final int MAX_LEVEL_OPERATIONS_PER_TICK = 50; // critical limit
+    private static final double LEVEL_THROTTLE_MSPT = 10.0; // throttle level ops at 10ms
+    private static final AtomicInteger levelOpsThisTick = new AtomicInteger(0);
+    
     // STARTUP TRACKING
     private static long worldLoadTime = 0;
     private static final long STARTUP_DURATION_MS = 60000; // 1 minute startup window
@@ -226,6 +237,7 @@ public class FlowingFluidsFixes {
                     // Reset counters for next period
                     totalTickTimeNanos = 0;
                     tickCount.set(0);
+                    levelOpsThisTick.set(0); // Reset level operations counter
                 }
                 lastMSPTCheck = System.currentTimeMillis();
             }
@@ -273,8 +285,71 @@ public class FlowingFluidsFixes {
     }
     
     /**
-     * PUBLIC API FOR OTHER SYSTEMS
+     * ENTITY THROTTLING - Reduce entity AI processing during high MSPT
      */
+    public static boolean shouldProcessEntity() {
+        // Always allow during emergency mode to prevent issues
+        if (cachedMSPT > EMERGENCY_MSPT) {
+            return false; // Skip all entities in emergency
+        }
+        
+        // Throttle entities during high MSPT
+        if (cachedMSPT > ENTITY_THROTTLE_MSPT) {
+            return tickCount.get() % ENTITY_SKIP_RATE != 0; // Skip every 2nd entity
+        }
+        
+        // More aggressive during startup
+        if (isInStartup && cachedMSPT > STARTUP_MSPT) {
+            return tickCount.get() % (ENTITY_SKIP_RATE + 1) != 0; // Skip every 3rd entity
+        }
+        
+        return true; // Allow entity processing
+    }
+    
+    /**
+     * LEVEL OPERATION THROTTLING - Critical for reducing 4,380 level operations
+     */
+    public static boolean shouldAllowLevelOperation() {
+        // Always allow during emergency mode to prevent issues
+        if (cachedMSPT > EMERGENCY_MSPT) {
+            return false; // Skip all level operations in emergency
+        }
+        
+        // Hard limit per tick
+        if (levelOpsThisTick.get() >= MAX_LEVEL_OPERATIONS_PER_TICK) {
+            return false; // Hard limit reached
+        }
+        
+        // Throttle during high MSPT
+        if (cachedMSPT > LEVEL_THROTTLE_MSPT) {
+            return tickCount.get() % 3 != 0; // Skip 66% of level operations
+        }
+        
+        // More aggressive during startup
+        if (isInStartup && cachedMSPT > STARTUP_MSPT) {
+            return tickCount.get() % 4 != 0; // Skip 75% of level operations
+        }
+        
+        return true; // Allow level operation
+    }
+    public static boolean shouldProcessChunk() {
+        // Always allow during emergency mode to prevent issues
+        if (cachedMSPT > EMERGENCY_MSPT) {
+            return false; // Skip all chunks in emergency
+        }
+        
+        // Throttle chunks during high MSPT
+        if (cachedMSPT > CHUNK_THROTTLE_MSPT) {
+            return tickCount.get() % CHUNK_SKIP_RATE != 0; // Skip every 3rd chunk
+        }
+        
+        // More aggressive during startup
+        if (isInStartup && cachedMSPT > STARTUP_MSPT) {
+            return tickCount.get() % (CHUNK_SKIP_RATE + 1) != 0; // Skip every 4th chunk
+        }
+        
+        return true; // Allow chunk processing
+    }
     
     // Simple MSPT check
     public static double getMSPT() {
@@ -292,8 +367,15 @@ public class FlowingFluidsFixes {
         int skipped = skippedFluidEvents.get();
         double skipRate = total > 0 ? (skipped * 100.0 / total) : 0.0;
         
-        return String.format("Events: %d total, %d skipped (%.1f%%), MSPT: %.1f", 
-                           total, skipped, skipRate, cachedMSPT);
+        // Add entity, chunk, and level status
+        String entityStatus = shouldProcessEntity() ? "ACTIVE" : "THROTTLED";
+        String chunkStatus = shouldProcessChunk() ? "ACTIVE" : "THROTTLED";
+        String levelStatus = shouldAllowLevelOperation() ? "ACTIVE" : "THROTTLED";
+        String startupStatus = isInStartup ? "STARTUP" : "NORMAL";
+        int levelOps = levelOpsThisTick.get();
+        
+        return String.format("Events: %d total, %d skipped (%.1f%%), MSPT: %.1f | Entity: %s, Chunk: %s, Level: %s (%d/tick), Mode: %s", 
+                           total, skipped, skipRate, cachedMSPT, entityStatus, chunkStatus, levelStatus, levelOps, startupStatus);
     }
     
     // Compatibility methods for other systems
