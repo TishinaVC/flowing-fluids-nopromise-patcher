@@ -48,10 +48,11 @@ public class FlowingFluidsFixes {
     private static final AtomicInteger tickCount = new AtomicInteger(0);
     private static long totalTickTimeNanos = 0;
     
-    // CONFIGURATION - simple and effective
-    private static final int MAX_FLUID_DISTANCE = 4; // chunks
-    private static final int MAX_EVENTS_PER_TICK = 500; // conservative limit
-    private static final double EMERGENCY_MSPT = 50.0; // emergency threshold
+    // CONFIGURATION - more aggressive for startup performance
+    private static final int MAX_FLUID_DISTANCE = 3; // reduced from 4 for startup
+    private static final int MAX_EVENTS_PER_TICK = 200; // reduced from 500 for startup
+    private static final double EMERGENCY_MSPT = 30.0; // reduced from 50.0 for earlier protection
+    private static final double STARTUP_MSPT = 20.0; // startup-specific threshold
     
     // SAFETY FLAG - prevent caching during mod initialization
     private static boolean allowCaching = false;
@@ -63,8 +64,9 @@ public class FlowingFluidsFixes {
     }
     
     private void commonSetup(final FMLCommonSetupEvent event) {
-        // Simple initialization - no complex systems
-        System.out.println("[FlowingFluidsFixes] Simplified optimizer loaded");
+        // Enable caching immediately during setup for startup protection
+        allowCaching = true;
+        System.out.println("[FlowingFluidsFixes] Simplified optimizer loaded - startup protection enabled");
     }
     
     /**
@@ -73,6 +75,12 @@ public class FlowingFluidsFixes {
      */
     @SubscribeEvent
     public static void onNeighborNotify(BlockEvent.NeighborNotifyEvent event) {
+        // STARTUP PROTECTION - more aggressive during early world load
+        if (cachedMSPT > STARTUP_MSPT) {
+            skippedFluidEvents.incrementAndGet();
+            return;
+        }
+        
         // EMERGENCY EXIT - skip everything if server is struggling
         if (cachedMSPT > EMERGENCY_MSPT) {
             skippedFluidEvents.incrementAndGet();
