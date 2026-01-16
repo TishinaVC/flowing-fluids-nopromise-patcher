@@ -1,0 +1,11 @@
+Manifest-Version: 1.0
+Specification-Title: FlowingFluidsFixes
+Specification-Vendor: FlowingFluidsFixes
+Specification-Version: 1
+Implementation-Title: PerformanceFix
+Implementation-Version: 1.0.13
+Implementation-Vendor: FlowingFluidsFixes
+Implementation-Timestamp: 2026-01-16T13:27:17-0800
+MixinConfigs: flowingfluidsfixes.mixins.json
+FMLCorePluginContainsFMLMod: true
+
