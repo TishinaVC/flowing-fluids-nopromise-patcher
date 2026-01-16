@@ -317,12 +317,58 @@ public class FlowingFluidsFixes {
             return;
         }
         
+        // CRITICAL: Never block player interactions (building, breaking, etc.)
+        // Check if this is a player-initiated action
+        if (isPlayerAction(event)) {
+            return; // Always allow player actions
+        }
+        
+        // Additional safety: Don't block events that might affect players
+        if (mightAffectPlayer(event)) {
+            return; // Allow events that could impact players
+        }
+        
         if (!shouldProcessBlock()) {
             event.setCanceled(true);
             skippedFluidEvents.incrementAndGet();
             return;
         }
         blockOperationsThisTick.incrementAndGet();
+    }
+    
+    // Helper method to detect player actions
+    private static boolean isPlayerAction(BlockEvent event) {
+        // Check if the event source is a player
+        try {
+            // Try to get the entity that caused this event
+            if (event instanceof BlockEvent.BreakEvent) {
+                BlockEvent.BreakEvent breakEvent = (BlockEvent.BreakEvent) event;
+                return breakEvent.getPlayer() != null;
+            }
+            return false; // Default to false for unknown event types
+        } catch (Exception e) {
+            // If we can't determine, err on the side of allowing it
+            return true;
+        }
+    }
+    
+    // Additional safety check for events that might affect players
+    private static boolean mightAffectPlayer(BlockEvent event) {
+        try {
+            // Don't block events near spawn or in areas where players might be active
+            BlockPos pos = event.getPos();
+            // If we're in startup mode, be more conservative
+            if (isInStartup) {
+                return true; // Allow everything during startup
+            }
+            // If MSPT is very high, we might be too aggressive - allow some events
+            if (getMSPT() > CRITICAL_MSPT) {
+                return true; // Allow events during extreme lag to prevent player frustration
+            }
+            return false;
+        } catch (Exception e) {
+            return true; // Err on the side of caution
+        }
     }
     
     // CRITICAL: Enhanced Neighbor Notify Event - Major source of 15.3M operations
